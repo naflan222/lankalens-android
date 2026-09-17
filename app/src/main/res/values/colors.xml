@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="lankalens_green">#0E7C66</color>
+    <color name="lankalens_gold">#D99A18</color>
     <color name="lankalens_white">#FFFFFF</color>
     <color name="lankalens_black">#111111</color>
 </resources>
