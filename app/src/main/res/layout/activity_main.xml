@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
-    android:background="@color/lankalens_white">
+    android:background="@color/lankalens_green_darker">
 
     <lk.lankalens.app.SafeSwipeRefreshLayout
         android:id="@+id/swipeRefresh"

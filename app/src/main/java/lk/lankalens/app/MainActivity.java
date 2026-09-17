@@ -361,13 +361,11 @@ public class MainActivity extends AppCompatActivity {
                 "(document.head||document.documentElement).appendChild(s);" +
                 "}" +
                 "s.textContent='" +
-                ".hero{padding-top:max(22px,env(safe-area-inset-top,22px))!important;}" +
                 ".hero .flex.aic.jcsb{align-items:center!important;padding:2px 0 6px!important;min-height:48px!important;}" +
                 ".hero .brand{display:flex!important;align-items:center!important;min-height:40px!important;}" +
                 ".hero .brand .brand-mark{width:36px!important;height:36px!important;min-width:36px!important;}" +
                 ".hero .brand .brand-text{display:flex!important;flex-direction:column!important;justify-content:center!important;}" +
                 ".hero .icon-btn{width:40px!important;height:40px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;background:rgba(255,255,255,.18)!important;border-radius:10px!important;color:#fff!important;}" +
-                ".app-header{padding-top:max(0px,env(safe-area-inset-top,0px))!important;}" +
                 ".app-tabbar .sell-tab{top:-11px!important;}" +
                 ".app-tabbar .sell-fab{width:48px!important;height:48px!important;font-size:22px!important;box-shadow:0 5px 12px rgba(240,165,0,.30)!important;}" +
                 ".app-tabbar .sell-fab .ionicon{width:22px!important;height:22px!important;font-size:22px!important;}" +
