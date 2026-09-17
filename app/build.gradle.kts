@@ -10,8 +10,8 @@ android {
         applicationId = "lk.lankalens.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -27,5 +27,6 @@ android {
 }
 
 dependencies {
-    implementation("com.google.androidbrowserhelper:androidbrowserhelper:2.7.3")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }
