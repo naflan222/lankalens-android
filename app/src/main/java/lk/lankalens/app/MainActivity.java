@@ -155,6 +155,29 @@ public class MainActivity extends AppCompatActivity {
         String device = Build.DEVICE != null ? Build.DEVICE.toLowerCase() : "";
         String product = Build.PRODUCT != null ? Build.PRODUCT.toLowerCase() : "";
         String hardware = Build.HARDWARE != null ? Build.HARDWARE.toLowerCase() : "";
+        String host = Build.HOST != null ? Build.HOST.toLowerCase() : "";
+
+        // Check if Linux DRM render nodes are present (/dev/dri/renderD*)
+        boolean hasDrmNode = false;
+        try {
+            File driDir = new File("/dev/dri");
+            if (driDir.exists() && driDir.isDirectory()) {
+                File[] nodes = driDir.listFiles();
+                if (nodes != null) {
+                    for (File node : nodes) {
+                        if (node.getName().startsWith("renderD")) {
+                            hasDrmNode = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (!hasDrmNode) {
+            return true;
+        }
 
         return fp.startsWith("generic")
                 || fp.startsWith("unknown")
@@ -176,6 +199,7 @@ public class MainActivity extends AppCompatActivity {
                 || product.contains("vbox86")
                 || product.contains("cuttlefish")
                 || product.contains("emulator")
+                || host.contains("android-build")
                 || (brand.startsWith("generic") && device.startsWith("generic"));
     }
 
@@ -260,6 +284,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 progress.setVisibility(View.VISIBLE);
                 errorPanel.setVisibility(View.GONE);
+                injectAndroidOnlyUiFixes(view);
             }
 
             @Override
@@ -336,6 +361,13 @@ public class MainActivity extends AppCompatActivity {
                 "(document.head||document.documentElement).appendChild(s);" +
                 "}" +
                 "s.textContent='" +
+                ".hero{padding-top:max(22px,env(safe-area-inset-top,22px))!important;}" +
+                ".hero .flex.aic.jcsb{align-items:center!important;padding:2px 0 6px!important;min-height:48px!important;}" +
+                ".hero .brand{display:flex!important;align-items:center!important;min-height:40px!important;}" +
+                ".hero .brand .brand-mark{width:36px!important;height:36px!important;min-width:36px!important;}" +
+                ".hero .brand .brand-text{display:flex!important;flex-direction:column!important;justify-content:center!important;}" +
+                ".hero .icon-btn{width:40px!important;height:40px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;background:rgba(255,255,255,.18)!important;border-radius:10px!important;color:#fff!important;}" +
+                ".app-header{padding-top:max(0px,env(safe-area-inset-top,0px))!important;}" +
                 ".app-tabbar .sell-tab{top:-11px!important;}" +
                 ".app-tabbar .sell-fab{width:48px!important;height:48px!important;font-size:22px!important;box-shadow:0 5px 12px rgba(240,165,0,.30)!important;}" +
                 ".app-tabbar .sell-fab .ionicon{width:22px!important;height:22px!important;font-size:22px!important;}" +
