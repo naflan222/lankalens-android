@@ -60,15 +60,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         ensureWebViewCacheDirs();
         super.onCreate(savedInstanceState);
-        if (getWindow() != null) {
+        if (isEmulatorEnvironment() && getWindow() != null) {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
         }
         setContentView(R.layout.activity_main);
-
-        View rootView = findViewById(android.R.id.content);
-        if (rootView != null) {
-            rootView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        }
 
         webView = findViewById(R.id.webView);
         swipeRefresh = findViewById(R.id.swipeRefresh);
@@ -76,10 +71,6 @@ public class MainActivity extends AppCompatActivity {
         errorPanel = findViewById(R.id.errorPanel);
         errorText = findViewById(R.id.errorText);
         Button retryButton = findViewById(R.id.retryButton);
-
-        if (swipeRefresh != null) {
-            swipeRefresh.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        }
 
         configureWebView();
 
@@ -157,16 +148,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isEmulatorEnvironment() {
-        return Build.FINGERPRINT.startsWith("generic")
-                || Build.FINGERPRINT.startsWith("unknown")
-                || Build.MODEL.contains("google_sdk")
-                || Build.MODEL.contains("Emulator")
-                || Build.MODEL.contains("Android SDK built for x86")
-                || Build.BOARD.contains("goldfish")
-                || Build.BOARD.contains("ranchu")
-                || Build.MANUFACTURER.contains("Genymotion")
-                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-                || "google_sdk".equals(Build.PRODUCT);
+        String fp = Build.FINGERPRINT != null ? Build.FINGERPRINT.toLowerCase() : "";
+        String model = Build.MODEL != null ? Build.MODEL.toLowerCase() : "";
+        String board = Build.BOARD != null ? Build.BOARD.toLowerCase() : "";
+        String brand = Build.BRAND != null ? Build.BRAND.toLowerCase() : "";
+        String device = Build.DEVICE != null ? Build.DEVICE.toLowerCase() : "";
+        String product = Build.PRODUCT != null ? Build.PRODUCT.toLowerCase() : "";
+        String hardware = Build.HARDWARE != null ? Build.HARDWARE.toLowerCase() : "";
+
+        return fp.startsWith("generic")
+                || fp.startsWith("unknown")
+                || fp.contains("emulator")
+                || fp.contains("vbox")
+                || fp.contains("test-keys")
+                || model.contains("google_sdk")
+                || model.contains("emulator")
+                || model.contains("android sdk")
+                || board.contains("goldfish")
+                || board.contains("ranchu")
+                || hardware.contains("goldfish")
+                || hardware.contains("ranchu")
+                || hardware.contains("vbox86")
+                || hardware.contains("cutf")
+                || hardware.contains("cuttlefish")
+                || product.contains("sdk")
+                || product.contains("google_sdk")
+                || product.contains("vbox86")
+                || product.contains("cuttlefish")
+                || product.contains("emulator")
+                || (brand.startsWith("generic") && device.startsWith("generic"));
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -186,17 +196,22 @@ public class MainActivity extends AppCompatActivity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setUserAgentString(settings.getUserAgentString() + " LankaLensAndroid/1.1");
 
-        // Use software rendering to avoid Mesa rendernode driver missing errors in emulator / container environments
-        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        // Performance optimizations
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.setSafeBrowsingEnabled(false);
+        }
+        // Enable hardware acceleration for smooth 60/120fps scrolling on devices;
+        // only fall back to software rendering if running in virtualized emulator without DRM
+        if (isEmulatorEnvironment()) {
+            webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        } else {
+            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        }
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             cookieManager.setAcceptThirdPartyCookies(webView, true);
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WebView.startSafeBrowsing(this, null);
         }
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -347,12 +362,8 @@ public class MainActivity extends AppCompatActivity {
                 "window.__llDetailWatcher=true;" +
                 "window.addEventListener('hashchange',function(){" +
                 "cleanProductDirectory();" +
-                "setTimeout(cleanProductDirectory,60);" +
-                "setTimeout(cleanProductDirectory,200);" +
-                "setTimeout(cleanProductDirectory,500);" +
+                "setTimeout(cleanProductDirectory,100);" +
                 "});" +
-                "var obs=new MutationObserver(function(){cleanProductDirectory();});" +
-                "obs.observe(document.body||document.documentElement,{childList:true,subtree:true});" +
                 "}" +
                 "})();";
         view.evaluateJavascript(js, null);
@@ -432,9 +443,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.resumeTimers();
+        }
+    }
+
+    @Override
     protected void onPause() {
         if (swipeRefresh != null && swipeRefresh.isRefreshing()) {
             swipeRefresh.setRefreshing(false);
+        }
+        if (webView != null) {
+            webView.onPause();
+            webView.pauseTimers();
         }
         super.onPause();
     }
