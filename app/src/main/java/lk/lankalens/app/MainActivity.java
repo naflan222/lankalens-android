@@ -2,8 +2,10 @@ package lk.lankalens.app;
 
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -24,14 +26,24 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String HOME_URL = "https://lankalens.lk/";
     private static final int FILE_CHOOSER_REQUEST = 4107;
+    private static final int MAX_LISTING_IMAGES = 3;
+    private static final int MAX_UPLOAD_BYTES = 950 * 1024;
+    private static final int MAX_IMAGE_EDGE = 1600;
 
     private WebView webView;
     private SwipeRefreshLayout swipeRefresh;
@@ -105,20 +117,33 @@ public class MainActivity extends AppCompatActivity {
                     fileCallback.onReceiveValue(null);
                 }
                 fileCallback = uploadMsg;
-                Intent intent;
-                try {
-                    intent = fileChooserParams.createIntent();
-                } catch (Exception e) {
-                    intent = new Intent(Intent.ACTION_GET_CONTENT);
-                    intent.setType("image/*");
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+                String type = "*/*";
+                String[] accepts = fileChooserParams == null ? null : fileChooserParams.getAcceptTypes();
+                if (accepts != null) {
+                    for (String accept : accepts) {
+                        if (accept != null && !accept.trim().isEmpty()) {
+                            type = accept.trim();
+                            break;
+                        }
+                    }
                 }
+                intent.setType(type);
+                boolean multiple = fileChooserParams != null
+                        && fileChooserParams.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+
                 try {
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+                    startActivityForResult(Intent.createChooser(intent, "Choose photos"), FILE_CHOOSER_REQUEST);
                     return true;
                 } catch (ActivityNotFoundException e) {
                     fileCallback = null;
-                    Toast.makeText(MainActivity.this, "No file picker is available on this device.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "No photo picker is available on this device.", Toast.LENGTH_SHORT).show();
                     return false;
                 }
             }
@@ -135,6 +160,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 progress.setVisibility(View.GONE);
                 swipeRefresh.setRefreshing(false);
+                injectAndroidOnlyUiFixes(view);
             }
 
             @Override
@@ -176,6 +202,20 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Unable to open this download.", Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    private void injectAndroidOnlyUiFixes(WebView view) {
+        String js = "(function(){" +
+                "var id='ll-android-ui-fixes';" +
+                "if(document.getElementById(id))return;" +
+                "var s=document.createElement('style');s.id=id;" +
+                "s.textContent='" +
+                ".app-tabbar .sell-tab{top:-11px!important;}" +
+                ".app-tabbar .sell-fab{width:48px!important;height:48px!important;font-size:22px!important;box-shadow:0 5px 12px rgba(240,165,0,.30)!important;}" +
+                ".app-tabbar .sell-fab .ionicon{width:22px!important;height:22px!important;font-size:22px!important;}" +
+                ".app-tabbar .sell-tab span{font-size:10px!important;margin-top:1px!important;}" +
+                "';document.head.appendChild(s);})();";
+        view.evaluateJavascript(js, null);
     }
 
     private boolean handleNavigation(Uri uri) {
@@ -251,11 +291,118 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == FILE_CHOOSER_REQUEST && fileCallback != null) {
-            Uri[] results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-            fileCallback.onReceiveValue(results);
-            fileCallback = null;
+        if (requestCode != FILE_CHOOSER_REQUEST || fileCallback == null) return;
+
+        ValueCallback<Uri[]> callback = fileCallback;
+        fileCallback = null;
+
+        if (resultCode != RESULT_OK || data == null) {
+            callback.onReceiveValue(null);
+            return;
         }
+
+        List<Uri> selected = collectSelectedUris(data);
+        if (selected.isEmpty()) {
+            callback.onReceiveValue(null);
+            return;
+        }
+
+        Toast.makeText(this, "Preparing photo" + (selected.size() > 1 ? "s" : "") + "…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            ArrayList<Uri> prepared = new ArrayList<>();
+            int index = 0;
+            for (Uri source : selected) {
+                if (prepared.size() >= MAX_LISTING_IMAGES) break;
+                Uri out = prepareImageForUpload(source, index++);
+                if (out != null) prepared.add(out);
+            }
+            runOnUiThread(() -> {
+                if (prepared.isEmpty()) {
+                    Toast.makeText(MainActivity.this, "Could not prepare that photo. Try another image.", Toast.LENGTH_LONG).show();
+                    callback.onReceiveValue(null);
+                } else {
+                    callback.onReceiveValue(prepared.toArray(new Uri[0]));
+                }
+            });
+        }).start();
+    }
+
+    private List<Uri> collectSelectedUris(Intent data) {
+        ArrayList<Uri> result = new ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount() && result.size() < MAX_LISTING_IMAGES; i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+                if (uri != null) result.add(uri);
+            }
+        } else if (data.getData() != null) {
+            result.add(data.getData());
+        }
+        return result;
+    }
+
+    private Uri prepareImageForUpload(Uri source, int index) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream in = getContentResolver().openInputStream(source)) {
+                BitmapFactory.decodeStream(in, null, bounds);
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+
+            int sample = 1;
+            int largest = Math.max(bounds.outWidth, bounds.outHeight);
+            while (largest / sample > 2200) sample *= 2;
+
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            Bitmap bitmap;
+            try (InputStream in = getContentResolver().openInputStream(source)) {
+                bitmap = BitmapFactory.decodeStream(in, null, opts);
+            }
+            if (bitmap == null) return null;
+
+            int width = bitmap.getWidth();
+            int height = bitmap.getHeight();
+            int edge = Math.max(width, height);
+            if (edge > MAX_IMAGE_EDGE) {
+                float ratio = MAX_IMAGE_EDGE / (float) edge;
+                int targetW = Math.max(1, Math.round(width * ratio));
+                int targetH = Math.max(1, Math.round(height * ratio));
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true);
+                if (scaled != bitmap) bitmap.recycle();
+                bitmap = scaled;
+            }
+
+            byte[] encoded = encodeUnderLimit(bitmap);
+            bitmap.recycle();
+            if (encoded == null || encoded.length == 0) return null;
+
+            File dir = new File(getCacheDir(), "upload-cache");
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            File out = new File(dir, "lankalens-photo-" + System.currentTimeMillis() + "-" + index + ".jpg");
+            try (FileOutputStream stream = new FileOutputStream(out)) {
+                stream.write(encoded);
+                stream.flush();
+            }
+            return FileProvider.getUriForFile(this, getPackageName() + ".files", out);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private byte[] encodeUnderLimit(Bitmap bitmap) {
+        int quality = 84;
+        byte[] bytes = null;
+        while (quality >= 46) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) return null;
+            bytes = out.toByteArray();
+            if (bytes.length <= MAX_UPLOAD_BYTES) return bytes;
+            quality -= 8;
+        }
+        return bytes != null && bytes.length <= MAX_UPLOAD_BYTES ? bytes : null;
     }
 
     @Override
