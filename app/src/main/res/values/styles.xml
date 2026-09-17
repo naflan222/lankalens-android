@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.LankaLens" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:hardwareAccelerated">false</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:statusBarColor">@color/lankalens_green</item>

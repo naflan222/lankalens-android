@@ -2,19 +2,22 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:layerType="software"
     android:background="@color/lankalens_white">
 
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+    <lk.lankalens.app.SafeSwipeRefreshLayout
         android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:layerType="software">
 
         <WebView
             android:id="@+id/webView"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:layerType="software"
             android:overScrollMode="never" />
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+    </lk.lankalens.app.SafeSwipeRefreshLayout>
 
     <ProgressBar
         android:id="@+id/progress"

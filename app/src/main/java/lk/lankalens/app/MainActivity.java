@@ -10,12 +10,15 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.SafeBrowsingResponse;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -24,6 +27,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
@@ -54,8 +58,17 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        ensureWebViewCacheDirs();
         super.onCreate(savedInstanceState);
+        if (getWindow() != null) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+        }
         setContentView(R.layout.activity_main);
+
+        View rootView = findViewById(android.R.id.content);
+        if (rootView != null) {
+            rootView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
 
         webView = findViewById(R.id.webView);
         swipeRefresh = findViewById(R.id.swipeRefresh);
@@ -64,14 +77,43 @@ public class MainActivity extends AppCompatActivity {
         errorText = findViewById(R.id.errorText);
         Button retryButton = findViewById(R.id.retryButton);
 
+        if (swipeRefresh != null) {
+            swipeRefresh.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
         configureWebView();
 
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (webView != null && webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    setEnabled(false);
+                    getOnBackPressedDispatcher().onBackPressed();
+                }
+            }
+        });
+
         swipeRefresh.setColorSchemeResources(R.color.lankalens_green, R.color.lankalens_gold);
-        swipeRefresh.setOnRefreshListener(() -> webView.reload());
+        swipeRefresh.setOnRefreshListener(() -> {
+            if (webView != null) {
+                webView.reload();
+            } else {
+                swipeRefresh.setRefreshing(false);
+            }
+        });
         retryButton.setOnClickListener(v -> {
             errorPanel.setVisibility(View.GONE);
             progress.setVisibility(View.VISIBLE);
-            webView.reload();
+            if (webView != null) {
+                String currentUrl = webView.getUrl();
+                if (currentUrl == null || currentUrl.trim().isEmpty()) {
+                    webView.loadUrl(resolveInitialUrl(getIntent()));
+                } else {
+                    webView.reload();
+                }
+            }
         });
 
         String initialUrl = resolveInitialUrl(getIntent());
@@ -80,6 +122,51 @@ public class MainActivity extends AppCompatActivity {
         } else {
             webView.restoreState(savedInstanceState);
         }
+    }
+
+    private void ensureWebViewCacheDirs() {
+        try {
+            File cacheDir = getCacheDir();
+            if (cacheDir != null) {
+                // If corrupted fake index or incomplete index-dir was left, delete the HTTP Cache dir so Chromium reinitializes cleanly
+                File httpCacheDir = new File(cacheDir, "WebView/Default/HTTP Cache");
+                if (httpCacheDir.exists()) {
+                    File indexDir = new File(httpCacheDir, "index-dir");
+                    File realIndex = new File(indexDir, "the-real-index");
+                    if (indexDir.exists() && (!indexDir.isDirectory() || !realIndex.exists())) {
+                        deleteRecursive(httpCacheDir);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void deleteRecursive(File fileOrDirectory) {
+        if (fileOrDirectory != null && fileOrDirectory.exists()) {
+            if (fileOrDirectory.isDirectory()) {
+                File[] children = fileOrDirectory.listFiles();
+                if (children != null) {
+                    for (File child : children) {
+                        deleteRecursive(child);
+                    }
+                }
+            }
+            fileOrDirectory.delete();
+        }
+    }
+
+    private boolean isEmulatorEnvironment() {
+        return Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.BOARD.contains("goldfish")
+                || Build.BOARD.contains("ranchu")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || "google_sdk".equals(Build.PRODUCT);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -95,8 +182,12 @@ public class MainActivity extends AppCompatActivity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setUserAgentString(settings.getUserAgentString() + " LankaLensAndroid/1.1");
+
+        // Use software rendering to avoid Mesa rendernode driver missing errors in emulator / container environments
+        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -175,12 +266,29 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
+                if (request != null && request.isForMainFrame()) {
                     String description = error != null && error.getDescription() != null
                             ? error.getDescription().toString()
                             : "Could not connect to LankaLens.";
                     showError(description);
                 }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                if (request != null && request.isForMainFrame()) {
+                    int statusCode = errorResponse != null ? errorResponse.getStatusCode() : -1;
+                    if (statusCode >= 400) {
+                        showError("Server error (" + statusCode + "). Please tap Retry to reload.");
+                    }
+                }
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                recreateWebView();
+                showError("Web view rendering process was restarted. Tap Try again to reload.");
+                return true;
             }
 
             @Override
@@ -207,14 +315,46 @@ public class MainActivity extends AppCompatActivity {
     private void injectAndroidOnlyUiFixes(WebView view) {
         String js = "(function(){" +
                 "var id='ll-android-ui-fixes';" +
-                "if(document.getElementById(id))return;" +
-                "var s=document.createElement('style');s.id=id;" +
+                "var s=document.getElementById(id);" +
+                "if(!s){" +
+                "s=document.createElement('style');s.id=id;" +
+                "(document.head||document.documentElement).appendChild(s);" +
+                "}" +
                 "s.textContent='" +
                 ".app-tabbar .sell-tab{top:-11px!important;}" +
                 ".app-tabbar .sell-fab{width:48px!important;height:48px!important;font-size:22px!important;box-shadow:0 5px 12px rgba(240,165,0,.30)!important;}" +
                 ".app-tabbar .sell-fab .ionicon{width:22px!important;height:22px!important;font-size:22px!important;}" +
                 ".app-tabbar .sell-tab span{font-size:10px!important;margin-top:1px!important;}" +
-                "';document.head.appendChild(s);})();";
+                ".breadcrumbs,nav[aria-label=\"Breadcrumb\"],#detail-root .breadcrumbs{display:none!important;visibility:hidden!important;height:0!important;padding:0!important;margin:0!important;overflow:hidden!important;}" +
+                "';" +
+                "function cleanProductDirectory(){" +
+                "try{" +
+                "var crumbs=document.querySelectorAll('.breadcrumbs,nav[aria-label=\"Breadcrumb\"]');" +
+                "for(var i=0;i<crumbs.length;i++){" +
+                "crumbs[i].style.setProperty('display','none','important');" +
+                "if(crumbs[i].parentNode&&crumbs[i].closest&&crumbs[i].closest('#detail-root')){" +
+                "crumbs[i].parentNode.removeChild(crumbs[i]);" +
+                "}" +
+                "}" +
+                "if(location.hash&&(location.hash.indexOf('#/ads/')===0||location.hash.indexOf('#/listing/')===0)){" +
+                "window.scrollTo(0,0);" +
+                "var p=document.getElementById('page');if(p)p.scrollTop=0;" +
+                "}" +
+                "}catch(e){}" +
+                "}" +
+                "cleanProductDirectory();" +
+                "if(!window.__llDetailWatcher){" +
+                "window.__llDetailWatcher=true;" +
+                "window.addEventListener('hashchange',function(){" +
+                "cleanProductDirectory();" +
+                "setTimeout(cleanProductDirectory,60);" +
+                "setTimeout(cleanProductDirectory,200);" +
+                "setTimeout(cleanProductDirectory,500);" +
+                "});" +
+                "var obs=new MutationObserver(function(){cleanProductDirectory();});" +
+                "obs.observe(document.body||document.documentElement,{childList:true,subtree:true});" +
+                "}" +
+                "})();";
         view.evaluateJavascript(js, null);
     }
 
@@ -247,6 +387,25 @@ public class MainActivity extends AppCompatActivity {
         return false;
     }
 
+    private void recreateWebView() {
+        try {
+            if (webView != null) {
+                swipeRefresh.removeView(webView);
+                webView.destroy();
+                webView = null;
+            }
+            webView = new WebView(this);
+            webView.setLayoutParams(new androidx.swiperefreshlayout.widget.SwipeRefreshLayout.LayoutParams(
+                    androidx.swiperefreshlayout.widget.SwipeRefreshLayout.LayoutParams.MATCH_PARENT,
+                    androidx.swiperefreshlayout.widget.SwipeRefreshLayout.LayoutParams.MATCH_PARENT
+            ));
+            webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            swipeRefresh.addView(webView);
+            configureWebView();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void showError(String message) {
         progress.setVisibility(View.GONE);
         swipeRefresh.setRefreshing(false);
@@ -273,19 +432,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        webView.saveState(outState);
-        super.onSaveInstanceState(outState);
+    protected void onPause() {
+        if (swipeRefresh != null && swipeRefresh.isRefreshing()) {
+            swipeRefresh.setRefreshing(false);
+        }
+        super.onPause();
     }
 
     @Override
-    @Deprecated
-    public void onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+    protected void onSaveInstanceState(Bundle outState) {
+        if (webView != null) {
+            webView.saveState(outState);
         }
+        super.onSaveInstanceState(outState);
     }
 
     @Override
